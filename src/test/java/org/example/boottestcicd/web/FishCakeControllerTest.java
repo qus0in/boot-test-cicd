@@ -25,7 +25,6 @@ public class FishCakeControllerTest {
                 .andExpect(status().isOk()) // then
                 .andExpect(jsonPath("$.length()").value(4))
                 .andExpect(jsonPath("$[0].shape").exists());;
-
     }
 
     @Test
