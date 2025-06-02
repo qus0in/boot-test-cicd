@@ -1,85 +1,80 @@
-# ---------------------------------------------------------------------------
-# GitHub Actions: Docker Image CI + Gradle & Docker Layer Caching + Prod 배포
+# ------------------------------------------------------------------------------
+# GitHub Actions: Docker Image CI + Deploy (Layer & Gradle Cache 최적화 버전)
+# ------------------------------------------------------------------------------
 # 목적
-#   1. main 브랜치 push 시 ➜ 테스트 → Docker 이미지 빌드 → GHCR 푸시
-#   2. Gradle 캐시(읽기 전용)·Docker Layer 캐시로 빌드 시간 단축
-#   3. 결과를 Slack Webhook 으로 통보
-#   4. 빌드 성공 후 원격 서버(SSH) 재배포
-# ---------------------------------------------------------------------------
-
-name: Docker Image CI with Layer Caching
+#   1. main 브랜치 push  → 테스트 → Docker 이미지 빌드 → GHCR 푸시
+#   2. Docker Layer Caching + Gradle Caching 으로 빌드 속도 단축
+#   3. 빌드 성공 시 원격 서버에 SSH 배포 (컨테이너 교체)
+#   4. 빌드/배포 결과를 Slack Webhook 으로 통보
+# ------------------------------------------------------------------------------
+name: Docker Image CI with Layer Caching & Deploy
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main ]          # main 브랜치만 트리거
 
+# -----------------------------------------------------------------------------  
+# 공통 권한: 소스 읽기 + GHCR 푸시
+# -----------------------------------------------------------------------------
+permissions:
+  contents: read
+  packages: write
+
+# =============================================================================
+# 1) Build & Push Job
+# =============================================================================
 jobs:
-  # -------------------------------------------------------------------------
-  # 1) 테스트 및 이미지 빌드·푸시
-  # -------------------------------------------------------------------------
   build-and-push:
-    runs-on: ubuntu-latest
-
-    permissions:
-      contents: read   # 소스 읽기
-      packages: write  # GHCR 푸시
+    runs-on: ubuntu-latest      # 최신 Ubuntu-LTS 러너
 
     steps:
-      # 1. 코드 체크아웃 ------------------------------------------------------
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      # 1. 소스 체크아웃 -------------------------------------------------------
+      - uses: actions/checkout@v4
 
-      # 2. Java 17 + Gradle 환경 설정 ----------------------------------------
-      - name: Set up Java 17 & Gradle
-        uses: gradle/actions/setup-gradle@v3
+      # 2. JDK 17 설치 + Gradle 캐시 ------------------------------------------
+      #    setup-java@v4: JDK 설치 + Gradle 의존성 캐싱
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
         with:
+          distribution: temurin # AdoptOpenJDK 배포판
           java-version: 17
-          distribution: temurin
-          cache-read-only: true   # post-job 업로드 생략 → 대기 시간 0
+          cache: gradle         # ~/.gradle/* 자동 캐싱
 
-      # 3. 변동 적은 Gradle 캐시 복원 ---------------------------------------
-      - name: Restore Gradle wrapper & modules cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/wrapper
-            ~/.gradle/caches/modules-*/files-*/*
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
-      # 4. 단위 테스트 -------------------------------------------------------
+      # 3. Gradle 빌드 설정 최적화 -------------------------------------------
+      #    setup-gradle@v3: 빌드 스캔/캐시 최적화 (JDK 미포함)
+      - name: Configure Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      # 4. 단위 테스트 실행 ----------------------------------------------------
       - name: Run unit tests
-        run: ./gradlew --no-daemon --build-cache --parallel test
+        run: ./gradlew --no-daemon --parallel test
 
-      # 5. Docker Buildx 준비 ----------------------------------------------
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      # 5. Docker Buildx 준비 -------------------------------------------------
+      - uses: docker/setup-buildx-action@v3
 
-      # 6. GHCR 로그인 -------------------------------------------------------
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+      # 6. GHCR 로그인 ---------------------------------------------------------
+      - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.GITHUB_TOKEN }} # Actions 제공 토큰
 
-      # 7. Docker 메타데이터 -------------------------------------------------
-      - name: Extract Docker metadata
+      # 7. 이미지 메타데이터(태그/라벨) 추출 -----------------------------------
+      - uses: docker/metadata-action@v5
         id: meta
-        uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
 
-      # 8. Docker 레이어 캐시 ------------------------------------------------
-      - name: Cache Docker layers
-        uses: actions/cache@v4
+      # 8. Docker Layer Cache --------------------------------------------------
+      - uses: actions/cache@v4
         with:
           path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-buildx-${{ github.ref_name }}   # 브랜치 단위
+          key: ${{ runner.os }}-buildx-${{ github.ref_name }} # 브랜치별 캐시
           restore-keys: |
-            ${{ runner.os }}-buildx-
-      # 9. 이미지 빌드 & 푸시 ------------------------------------------------
-      - name: Build and push Docker image
+            ${{ runner.os }}-buildx-                           # 폴백 키
+
+      # 9. 이미지 빌드 & GHCR 푸시 ---------------------------------------------
+      - name: Build & Push image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -90,51 +85,42 @@ jobs:
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to:   type=local,dest=/tmp/.buildx-cache,mode=max
 
-      # 10. Slack 알림 --------------------------------------------------------
-      - name: Send Slack Notification
-        if: always()
+# =============================================================================
+# 2) Deploy Job (빌드 성공 시에만 실행)
+# =============================================================================
+  deploy:
+    needs: build-and-push                       # 빌드 잡 의존
+    runs-on: ubuntu-latest
+    if: ${{ needs.build-and-push.result == 'success' }}
+
+    steps:
+      # 1. SSH 원격 배포 -------------------------------------------------------
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host:     ${{ secrets.PROD_HOST }}     # 원격 호스트
+          username: ${{ secrets.PROD_USER }}     # 원격 사용자
+          key:      ${{ secrets.SSH_PRIVATE_KEY }} # PEM 내용
+          port:     ${{ secrets.PROD_PORT || 22 }}
+          script: |
+            IMAGE="ghcr.io/${{ github.repository }}:latest"
+            CONTAINER="app"
+            # GHCR 로그인 (필요 시)
+            docker login ghcr.io -u ${{ github.actor }} -p ${{ secrets.GITHUB_TOKEN }}
+            docker pull $IMAGE                    # 최신 이미지 풀
+            docker rm -f $CONTAINER || true       # 기존 컨테이너 제거(존재 시)
+            docker run -d --name $CONTAINER -p 8080:8080 $IMAGE
+
+      # 2. Slack 알림 ----------------------------------------------------------
+      - name: Slack Notification
+        if: always()                             # 성공/실패 모두 전송
         uses: act10ns/slack@v2.1.0
         with:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
           status: ${{ job.status }}
           message: |
-            *GitHub Actions Workflow Status*
-            • *Repo:* `${{ github.repository }}`
-            • *Branch:* `${{ github.ref_name }}`
-            • *Commit:* `${{ github.sha }}`
-            • *Workflow:* `${{ github.workflow }}`
-            • *Run ID:* `${{ github.run_id }}`
-            • *Status:* `${{ job.status }}`
-            • *Logs:* <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Details>
-            • *Image Tags:* `${{ steps.meta.outputs.tags }}`
-  # -------------------------------------------------------------------------
-  # 2) 프로덕션 서버 재배포 (SSH)
-  #    - build-and-push 완료 후 실행
-  #    - main 브랜치에서만 동작
-  # -------------------------------------------------------------------------
-  deploy-prod:
-    needs: build-and-push          # 이미지 푸시 성공 시에만
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
-
-    steps:
-      # 원격 서버에 SSH 접속 후 컨테이너 교체 -------------------------------
-      - name: Remote redeploy via SSH
-        uses: appleboy/ssh-action@v1.0.0
-        with:
-          host: ${{ secrets.SSH_HOST }}          # 예) 203.0.113.10
-          username: ${{ secrets.SSH_USER }}      # 예) ubuntu
-          key: ${{ secrets.SSH_PRIVATE_KEY }}    # PEM 전체 문자열
-          script: |
-            set -e
-            IMAGE=ghcr.io/${{ github.repository }}/app:${{ github.sha }}
-            echo "Logging in to GHCR..."
-            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-            docker pull $IMAGE
-            echo "Stopping and removing old container..."
-            docker rm -f app || true
-            echo "Starting new container..."
-            docker run -d --name app \
-              -p 80:8080 \
-              --restart unless-stopped \
-              $IMAGE
+            *Deploy* `${{ job.status }}`
+            • Repo: `${{ github.repository }}`
+            • Host: `${{ secrets.PROD_HOST }}`
+            • Image: `ghcr.io/${{ github.repository }}:latest`
+            • Logs: <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|Details>
