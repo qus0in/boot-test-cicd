@@ -18,5 +18,5 @@ public class FishCakeController {
     }
 
 //    public record FishCake(String shape) {}
-    public record FishCake(String name) {}
+    public record FishCake(String shape) {}
 }
