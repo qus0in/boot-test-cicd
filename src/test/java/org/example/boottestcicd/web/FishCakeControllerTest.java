@@ -22,7 +22,10 @@ public class FishCakeControllerTest {
     @DisplayName("GET /fishcake -> 200")
     void getFiskCakeOK() throws Exception {
         mockMvc.perform(get("/fishcake")) // when
-                .andExpect(status().isOk()); // then
+                .andExpect(status().isOk()) // then
+                .andExpect(jsonPath("$.length()").value(4))
+                .andExpect(jsonPath("$[0].shape").exists());;
+
     }
 
     @Test
