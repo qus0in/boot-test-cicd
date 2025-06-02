@@ -135,5 +135,5 @@ jobs:                                  # 잡 정의 블록 시작
           *Prod Deploy* `${{ github.repository }}`
           • *Status:* `${{ job.status }}`
           • *Server:* `${{ secrets.SSH_HOST }}`
-          • *Image:* `${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}`
+          • *Image:* `${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}`
           • <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|Logs>
