@@ -119,7 +119,7 @@ jobs:                                  # 잡 정의 블록 시작
         key: ${{ secrets.SSH_PRIVATE_KEY }} # PEM 키 문자열
         script: |                    # 실행 스크립트
           set -e                     #   에러 시 종료
-          IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} # 이미지
+          IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }} # 이미지
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin # GHCR 로그인
           docker pull $IMAGE         #   새 이미지 풀
           docker rm -f app || true   #   기존 컨테이너 제거
