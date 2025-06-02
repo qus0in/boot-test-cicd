@@ -17,5 +17,5 @@ public class FishCakeController {
         return ResponseEntity.ok(fishCakes);
     }
 
-    public record FishCake(String name) {}
+    public record FishCake(String shape) {}
 }
