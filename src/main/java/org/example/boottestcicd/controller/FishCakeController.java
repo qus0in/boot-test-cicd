@@ -13,7 +13,7 @@ import java.util.List;
 public class FishCakeController {
     @GetMapping
     public ResponseEntity<List<FishCake>> list() {
-        List<FishCake> fishCakes = List.of(new FishCake("스펀지밥"), new FishCake("뚱이"), new FishCake("징징이"), new FishCake("집게사장"));
+        List<FishCake> fishCakes = List.of(new FishCake("루비"), new FishCake("아유무"), new FishCake("시키"), new FishCake("민나"));
         return ResponseEntity.ok(fishCakes);
     }
 
